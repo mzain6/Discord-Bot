@@ -4,6 +4,7 @@ import sys
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from utils.logger import logger
 
 
 class AuthManager:
@@ -31,16 +32,35 @@ class AuthManager:
         self.last_refresh: datetime | None = self._load_state()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._is_refreshing = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def should_refresh(self) -> bool:
-        """Returns True only if no refresh has occurred or 11h have passed."""
+        """Returns True only if no refresh has occurred, 11h have passed, or file is missing."""
         if self.last_refresh is None:
             return True
+        if self.is_file_missing_or_empty():
+            return True
         return datetime.now() - self.last_refresh >= timedelta(hours=self.TOKEN_LIFETIME_HOURS)
+
+    def is_refreshing(self) -> bool:
+        """Returns True if a token refresh is currently in progress."""
+        return self._is_refreshing
+
+    def is_file_missing_or_empty(self) -> bool:
+        """Checks if the user manually deleted or cleared the saved_cookies.json file."""
+        if not self.COOKIES_PATH.exists():
+            return True
+        try:
+            data = self.COOKIES_PATH.read_text().strip()
+            if not data or data == "{}" or "cookies" not in json.loads(data):
+                return True
+        except Exception:
+            return True
+        return False
 
     def refresh(self):
         """
@@ -48,23 +68,31 @@ class AuthManager:
         inject fresh credentials into the scraper, save timestamp.
         """
         with self._lock:
+            # Prevent redundant refreshes if another thread just finished one
+            if self.last_refresh and (datetime.now() - self.last_refresh).total_seconds() < 120:
+                logger.info("[AUTH] Tokens were recently refreshed. Skipping redundant refresh.")
+                return
+
+            self._is_refreshing = True
             try:
-                print("[AUTH] Starting token refresh (subprocess mode)...")
+                logger.info("[AUTH] 🔄 Starting token refresh (Subprocess Mode). Scraping will continue using current tokens until update is complete.")
                 cookies, auth_token = self._extract_credentials()
 
                 if cookies:
                     self.scraper.update_credentials(cookies, auth_token)
                     self.last_refresh = datetime.now()
                     self._save_state(cookies, auth_token)
-                    print(f"[AUTH] Tokens refreshed successfully at "
-                          f"{self.last_refresh.strftime('%H:%M:%S')} — "
-                          f"{len(cookies)} cookies extracted.")
+                    logger.info(f"[AUTH] ✅ Tokens refreshed successfully at "
+                                f"{self.last_refresh.strftime('%H:%M:%S')} — "
+                                f"{len(cookies)} cookies extracted.")
                 else:
-                    print("[AUTH] WARNING: No cookies extracted. Keeping existing credentials.")
+                    logger.warning("[AUTH] ⚠️ No cookies extracted. Keeping existing credentials.")
 
             except Exception as e:
-                print(f"[AUTH] ERROR during token refresh: {e}")
-                print("[AUTH] Will retry at next check interval.")
+                logger.error(f"[AUTH] ❌ ERROR during token refresh: {e}")
+                logger.info("[AUTH] Will retry at next check interval.")
+            finally:
+                self._is_refreshing = False
 
     def start_background_refresh(self):
         """
@@ -77,9 +105,9 @@ class AuthManager:
             remaining = timedelta(hours=self.TOKEN_LIFETIME_HOURS) - elapsed
             hours, rem = divmod(int(remaining.total_seconds()), 3600)
             minutes = rem // 60
-            print(f"[AUTH] Next refresh in {hours}h {minutes}m. Background thread started.")
+            logger.info(f"[AUTH] Next refresh in {hours}h {minutes}m. Background thread started.")
         else:
-            print("[AUTH] Background refresh thread started.")
+            logger.info("[AUTH] Background refresh thread started.")
 
         def _loop():
             while True:
@@ -106,7 +134,7 @@ class AuthManager:
                 json.dumps({"cookies": cookies, "auth_token": auth_token})
             )
         except Exception as e:
-            print(f"[AUTH] Could not save token state: {e}")
+            logger.error(f"[AUTH] Could not save token state: {e}")
 
     def _load_state(self) -> datetime | None:
         """Loads timestamp from disk and injects saved cookies into scraper."""
@@ -124,10 +152,10 @@ class AuthManager:
                         cdata.get("cookies", {}),
                         cdata.get("auth_token")
                     )
-                    print(f"[AUTH] Loaded saved credentials from disk ({hours}h old).")
+                    logger.info(f"[AUTH] Loaded saved credentials from disk ({hours}h old).")
                 return ts
         except Exception as e:
-            print(f"[AUTH] Could not load token state: {e}")
+            logger.error(f"[AUTH] Could not load token state: {e}")
         return None
 
     # ------------------------------------------------------------------

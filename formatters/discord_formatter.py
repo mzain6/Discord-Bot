@@ -12,23 +12,27 @@ def time_ago(dt):
     else:
         return f"{diff.seconds} seconds ago"
 
-def format_job_summary(job_data):
+def format_job_summary(job_data, is_update=False):
     """Formats job data for the main channel post."""
     title = job_data.get('title', 'Unknown Title')
     
-    job_tile = job_data.get('jobTile', {})
-    job = job_tile.get('job', {})
+    job_tile = job_data.get('jobTile') or {}
+    job = job_tile.get('job') or {}
     if not job and job_data.get('job'):
         job = job_data['job']
         
     job_url = f"https://www.upwork.com/jobs/{job.get('ciphertext', '')}"
     
     # Parse time
-    create_time_str = job.get('createTime', '')
+    # For updates, use publishTime; for new jobs, use createTime
+    time_str = job.get('publishTime') if is_update else job.get('createTime')
+    if not time_str:
+        time_str = job.get('createTime') or job.get('publishTime') or ''
+        
     posted_ago = "Recently"
-    if create_time_str:
+    if time_str:
         try:
-            dt = datetime.datetime.strptime(create_time_str.split('.')[0] + "Z", "%Y-%m-%dT%H:%M:%S%z")
+            dt = datetime.datetime.strptime(time_str.split('.')[0] + "Z", "%Y-%m-%dT%H:%M:%S%z")
             posted_ago = time_ago(dt)
         except Exception:
             pass
@@ -65,15 +69,24 @@ def format_job_summary(job_data):
     desc = job_data.get('description', '')
     desc_preview = desc[:350].strip() + "..." if len(desc) > 350 else desc.strip()
 
+    if is_update:
+        header_emoji = "🔄"
+        header_text = "Job Updated"
+        time_label = "Updated:"
+    else:
+        header_emoji = "🆕"
+        header_text = "New Job Alert"
+        time_label = "Posted:"
+
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🆕 **New Job Alert**\n"
+        f"{header_emoji} **{header_text}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 **{title}**\n\n"
         f"💵 **Budget:** {budget}\n"
         f"🎯 **Level:** {level}\n"
         f"📁 **Type:** {type_label}\n"
-        f"🕒 **Posted:** {posted_ago}\n\n"
+        f"🕒 **{time_label}** {posted_ago}\n\n"
         f"📝 **Description:**\n{desc_preview}\n\n"
         f"🔗 [**Apply on Upwork**]({job_url})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━"
@@ -88,7 +101,7 @@ def format_job_summary(job_data):
 def format_thread_details(job_data, full_details=None):
     """Formats full job details for the thread."""
     desc = job_data.get('description', 'No description provided.')
-    job = job_data.get('jobTile', {}).get('job', {})
+    job = (job_data.get('jobTile') or {}).get('job') or {}
     
     job_url = f"https://www.upwork.com/jobs/{job.get('ciphertext', '')}"
     
