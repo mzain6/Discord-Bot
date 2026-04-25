@@ -16,19 +16,28 @@ def main():
     auth_token = None
 
     try:
-        with SB(uc=True, headless=True) as driver:
-            driver.get("https://www.upwork.com/nx/search/jobs/")
-            driver.sleep(5)  # Wait for Cloudflare to clear
+        with SB(uc=True, headless2=True) as driver:
+            driver.uc_open_with_reconnect("https://www.upwork.com/nx/search/jobs/", 5)
+            
+            # Aggressive polling: wait up to 30 seconds for the token to appear
+            for _ in range(30):
+                raw_cookies = driver.get_cookies()
+                cookie_dict = {c["name"]: c["value"] for c in raw_cookies}
+                
+                auth_token = (
+                    cookie_dict.get("UniversalSearchNuxt_vt")
+                    or cookie_dict.get("visitor_gql_token")
+                    or cookie_dict.get("visitor_topnav_gql_token")
+                )
+                
+                if auth_token:
+                    cookies.update(cookie_dict)
+                    break
+                driver.sleep(1)
 
-            for cookie in driver.get_cookies():
-                cookies[cookie["name"]] = cookie["value"]
-
-            auth_token = (
-                cookies.get("UniversalSearchNuxt_vt")
-                or cookies.get("visitor_gql_token")
-                or cookies.get("visitor_topnav_gql_token")
-            )
-
+    except KeyboardInterrupt:
+        print(json.dumps({"error": "Process was interrupted by user (Ctrl+C)"}), flush=True)
+        sys.exit(1)
     except Exception as e:
         print(json.dumps({"error": str(e)}), flush=True)
         sys.exit(1)
